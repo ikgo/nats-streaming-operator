@@ -32,7 +32,7 @@ func main() {
 	log.SetFormatter(formatter)
 
 	controller := operator.NewController(nil)
-	log.Infof("Starting NATS Streaming Operator v%s", operator.Version)
+	log.Infof("Starting NATS Streaming Operator(IK fix) v%s", operator.Version)
 	log.Infof("Go Version: %s", runtime.Version())
 
 	err := controller.Run(context.Background())

@@ -296,6 +296,7 @@ func (c *Controller) reconcile(o *stanv1alpha1.NatsStreamingCluster) error {
 	}
 
 	n := len(pods) - int(o.Spec.Size)
+	log.Infof("Pods count: %d spec size: %d store: %s", len(pods), int(o.Spec.Size), o.Spec.StoreType)
 	if n == 0 {
 		log.Debugf("Reconciled '%s/%s' cluster (size=%d/%d)", o.Namespace, o.Name, o.Spec.Size, o.Spec.Size)
 		return nil
@@ -304,8 +305,23 @@ func (c *Controller) reconcile(o *stanv1alpha1.NatsStreamingCluster) error {
 		return c.shrinkCluster(pods, n)
 	} else if n < 0 {
 		log.Infof("Missing pods for '%s/%s' cluster (size=%d/%d), creating %d pods...", o.Namespace, o.Name, len(pods), o.Spec.Size, n*-1)
+		var bootstrapExists int
+		for _, p := range pods {
+			lb := p.GetLabels()
+			name := p.GetName()
+			log.Infof("POD Name: %s labels: %+v", name, lb)
+			if v, ok := lb["streaming-pod-type"]; ok && v == "bootstrap" {
+				bootstrapExists += 1
+			}
+		}
+
+		if bootstrapExists == 0 {
+			log.Infof("Bootstrap by label: %d", bootstrapExists)
+			return c.createBootstrapPod(o)
+		}
 
 		if o.Spec.StoreType == "SQL" {
+			log.Infof("Missing pods (SQL)")
 			return c.createMissingPods(o, n*-1)
 		}
 
@@ -313,8 +329,10 @@ func (c *Controller) reconcile(o *stanv1alpha1.NatsStreamingCluster) error {
 		// then try to create the first node to bootstrap the
 		// cluster.
 		c.mu.Lock()
+		log.Infof("Clusters: %+v podID: %v", c.clusters, o.UID)
 		if _, ok := c.clusters[o.UID]; !ok {
 			c.mu.Unlock()
+			log.Infof("Bootstrap by cluster")
 			return c.createBootstrapPod(o)
 		}
 		c.mu.Unlock()
@@ -322,8 +340,10 @@ func (c *Controller) reconcile(o *stanv1alpha1.NatsStreamingCluster) error {
 		// If no other nodes are available, then create one with the bootstrap
 		// flag so that it can become the leader.
 		if n == 0 {
+			log.Infof("Bootstrap by no pods")
 			return c.createBootstrapPod(o)
 		}
+		log.Infof("Missing pods")
 		return c.createMissingPods(o, n*-1)
 	}
 
@@ -333,7 +353,7 @@ func (c *Controller) reconcile(o *stanv1alpha1.NatsStreamingCluster) error {
 func (c *Controller) createBootstrapPod(o *stanv1alpha1.NatsStreamingCluster) error {
 	pod := newStanPod(o)
 	pod.Name = fmt.Sprintf("%s-1", o.Name)
-
+	pod.Labels["streaming-pod-type"] = "bootstrap"
 	container := stanContainer(o, pod)
 	container.Command = stanContainerBootstrapCmd(o, pod)
 
@@ -448,6 +468,7 @@ func (c *Controller) createMissingPods(o *stanv1alpha1.NatsStreamingCluster, n i
 		// Check whether the node has been created already,
 		// otherwise skip it.
 		name := fmt.Sprintf("%s-%d", o.Name, i)
+		log.Debugf("Create Missing: %s", name)
 		_, err := c.kc.CoreV1().Pods(o.Namespace).Get(name, k8smetav1.GetOptions{})
 		if err == nil {
 			continue
